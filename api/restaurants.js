@@ -1,11 +1,12 @@
-// api/restaurants.js — Foursquare Places (free dev tier, no card)
-// Supports ?city=City,State  OR  ?lat=..&lon=..&radius=5000  (meters)
+// api/restaurants.js — Foursquare (broader, reliable geocode, open toggle)
 
 const FSQ_KEY = process.env.FOURSQUARE_API_KEY;
-const DEFAULT_RADIUS = 5000; // meters
-const CATEGORY_RESTAURANT = "13065"; // Foursquare category for restaurants
 
-// simple JSON fetch helper
+// Common food & drink categories (restaurant + cafe + fast food + bar + pub)
+const DEFAULT_CATEGORIES = ["13065","13032","13099","13003","13377"];
+const DEFAULT_RADIUS = 8000; // meters
+const DEFAULT_LIMIT = 50;
+
 async function getJSON(url, headers = {}) {
   const r = await fetch(url, { headers });
   if (!r.ok) {
@@ -17,72 +18,63 @@ async function getJSON(url, headers = {}) {
 
 export default async function handler(req, res) {
   try {
-    if (!FSQ_KEY) {
-      return res.status(500).json({ error: "Missing FOURSQUARE_API_KEY" });
-    }
+    if (!FSQ_KEY) return res.status(500).json({ error: "Missing FOURSQUARE_API_KEY" });
 
-    const { city, lat, lon, radius } = req.query;
-    const headers = {
-      Accept: "application/json",
-      Authorization: FSQ_KEY,
-    };
+    const { city, lat, lon } = req.query;
+    const radius = Number(req.query.radius) || DEFAULT_RADIUS;
+    const limit = Math.min(Number(req.query.limit) || DEFAULT_LIMIT, 50);
+    const openNow = String(req.query.open ?? "true").toLowerCase() !== "false"; // default true
+    const categories = (req.query.categories ? String(req.query.categories).split(",") : DEFAULT_CATEGORIES)
+      .map(s => s.trim()).filter(Boolean).join(",");
 
-    let ll = null; // "lat,lon" string
-    let rad = Number(radius) || DEFAULT_RADIUS;
-
+    // 1) Get coordinates (prefer lat/lon if provided)
+    let ll;
     if (lat && lon) {
       ll = `${Number(lat)},${Number(lon)}`;
     } else if (city) {
-      // Geocode city name to coordinates using Foursquare
-      const geoUrl = new URL("https://api.foursquare.com/v3/places/search");
-      geoUrl.searchParams.set("query", city);
-      geoUrl.searchParams.set("limit", "1");
-      const g = await getJSON(geoUrl.toString(), headers);
-      const hit = (g.results || [])[0];
-      if (!hit?.geocodes?.main) {
-        return res.status(404).json({ error: "City not found" });
-      }
-      ll = `${hit.geocodes.main.latitude},${hit.geocodes.main.longitude}`;
+      // Geocode city with Nominatim (reliable + free)
+      const nomi = new URL("https://nominatim.openstreetmap.org/search");
+      nomi.searchParams.set("format", "json");
+      nomi.searchParams.set("limit", "1");
+      nomi.searchParams.set("q", city);
+      const geo = await fetch(nomi.toString(), {
+        headers: { "User-Agent": "SpinToEat/1.0", "Accept-Language":"en" }
+      }).then(r => r.json());
+      if (!geo?.length) return res.status(404).json({ error: "City not found" });
+      ll = `${geo[0].lat},${geo[0].lon}`;
     } else {
-      return res
-        .status(400)
-        .json({ error: "Provide ?city=... or ?lat=..&lon=.." });
+      return res.status(400).json({ error: "Provide ?city=... or ?lat=..&lon=.." });
     }
 
-    // Search for open restaurants near ll
-    // Note: Foursquare "open_now" is supported in v3 (boolean)
+    // 2) Foursquare search
+    const headers = { Accept: "application/json", Authorization: FSQ_KEY };
     const url = new URL("https://api.foursquare.com/v3/places/search");
     url.searchParams.set("ll", ll);
-    url.searchParams.set("radius", String(rad));
-    url.searchParams.set("categories", CATEGORY_RESTAURANT);
-    url.searchParams.set("open_now", "true");
+    url.searchParams.set("radius", String(radius));
+    url.searchParams.set("categories", categories);
     url.searchParams.set("sort", "DISTANCE");
-    url.searchParams.set("limit", "50");
+    url.searchParams.set("limit", String(limit));
+    if (openNow) url.searchParams.set("open_now", "true");
 
     const data = await getJSON(url.toString(), headers);
 
-    // Normalize results
-    const items = (data.results || []).map((p) => {
-      const name = p.name || "Unknown";
+    const items = (data.results || []).map(p => {
       const addr = [
         p.location?.address,
         p.location?.locality,
         p.location?.region,
-        p.location?.postcode,
-      ]
-        .filter(Boolean)
-        .join(", ");
-
+        p.location?.postcode
+      ].filter(Boolean).join(", ");
       return {
         id: p.fsq_id,
-        name,
+        name: p.name || "Unknown",
         address: addr,
         lat: p.geocodes?.main?.latitude,
         lon: p.geocodes?.main?.longitude,
-        rating: p.rating, // may be undefined on free tier
-        price: p.price,   // 1-4 if available
-        categories: (p.categories || []).map((c) => c.name),
-        website: p.website || "",
+        categories: (p.categories || []).map(c => c.name),
+        price: p.price || null,
+        rating: p.rating || null,
+        website: p.website || ""
       };
     }).filter(x => x.lat && x.lon);
 
@@ -93,11 +85,7 @@ export default async function handler(req, res) {
     }
 
     res.setHeader("Cache-Control", "s-maxage=60, stale-while-revalidate=300");
-    res.status(200).json({
-      count: items.length,
-      items,
-      attribution: "Data © Foursquare",
-    });
+    res.status(200).json({ count: items.length, items, attribution: "Data © Foursquare" });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Foursquare lookup failed" });
