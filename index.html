@@ -1,11 +1,91 @@
 <!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="utf-8">
-    <title>Spin to Eat</title>
-  </head>
-  <body>
-    <h1>Hello from Spin to Eat 🚀</h1>
-    <p>If you see this on your site, the setup worked!</p>
-  </body>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Spin to Eat 🍽️</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #fafafa; text-align: center; padding: 20px; }
+    h1 { color: #d6336c; }
+    #controls { margin: 20px 0; }
+    input, button { padding: 10px; margin: 5px; font-size: 1rem; }
+    #result { margin-top: 20px; padding: 15px; background: #fff; border-radius: 8px; box-shadow: 0 0 8px rgba(0,0,0,0.1); display: none; }
+    #result h2 { margin: 0 0 10px; }
+    a { color: #0070f3; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <h1>Spin to Eat 🍽️</h1>
+  <p>Can’t decide where to eat? Spin and get a random suggestion!</p>
+
+  <div id="controls">
+    <input id="cityInput" type="text" placeholder="Enter a city (e.g. Lafayette, LA)" />
+    <button onclick="fetchRestaurants()">Find</button>
+    <button onclick="useMyLocation()">Use My Location</button>
+  </div>
+
+  <div id="result">
+    <h2 id="placeName"></h2>
+    <p id="placeAddress"></p>
+    <p><a id="placeWebsite" target="_blank">Visit Website</a></p>
+    <button onclick="showAnother()">Another 🍀</button>
+  </div>
+
+  <script>
+    let restaurants = [];
+    let currentIndex = 0;
+
+    async function fetchRestaurants(city, lat, lon) {
+      let url = '/api/restaurants?';
+      if (lat && lon) {
+        url += `lat=${lat}&lon=${lon}&radius=5000`;
+      } else {
+        const cityVal = document.getElementById('cityInput').value || city;
+        url += `city=${encodeURIComponent(cityVal)}`;
+      }
+
+      try {
+        const res = await fetch(url);
+        const data = await res.json();
+        if (data.items && data.items.length > 0) {
+          restaurants = data.items;
+          currentIndex = 0;
+          showPlace();
+        } else {
+          alert("No restaurants found. Try another city!");
+        }
+      } catch (err) {
+        console.error(err);
+        alert("Error fetching restaurants");
+      }
+    }
+
+    function showPlace() {
+      if (restaurants.length === 0) return;
+      const place = restaurants[currentIndex];
+      document.getElementById('placeName').innerText = place.name;
+      document.getElementById('placeAddress').innerText = place.address || "No address available";
+      document.getElementById('placeWebsite').href = place.website || "#";
+      document.getElementById('placeWebsite').innerText = place.website ? "Visit Website" : "";
+      document.getElementById('result').style.display = "block";
+    }
+
+    function showAnother() {
+      if (restaurants.length === 0) return;
+      currentIndex = (currentIndex + 1) % restaurants.length;
+      showPlace();
+    }
+
+    function useMyLocation() {
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          pos => fetchRestaurants(null, pos.coords.latitude, pos.coords.longitude),
+          err => alert("Location access denied. Please enter a city instead.")
+        );
+      } else {
+        alert("Geolocation not supported.");
+      }
+    }
+  </script>
+</body>
 </html>
